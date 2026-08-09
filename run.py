@@ -1,194 +1,99 @@
 #!/usr/bin/env python3
 
-"""Entry point for Deep-Live-Cam.
-
-Supports a --smoke-test mode for packaged-distribution validation. When run
-without flags it starts the normal application (core.run()).
-"""
-from __future__ import annotations
-
-import sys
 import os
-import json
-import hashlib
-import argparse
-import traceback
+import sys
 
-# Import the tkinter fix to patch the ScreenChanged error (module patches Tk on import)
-try:
-    import tkinter_fix  # noqa: F401
-except Exception:
-    # In smoke-test mode we may not need GUI; continue
-    pass
+# Add the project root to PATH so bundled ffmpeg/ffprobe are found
+project_root = os.path.dirname(os.path.abspath(__file__))
+os.environ["PATH"] = project_root + os.pathsep + os.environ.get("PATH", "")
 
-# Import standalone defaults and hardware probe (applies presets and sets globals defaults)
-try:
-    import modules.standalone_apply  # noqa: F401
-except Exception:
-    # standalone_apply should exist; log on smoke-test if requested
-    pass
+# On Windows, register NVIDIA CUDA DLL directories so onnxruntime-gpu can
+# find cuDNN/cublas. Python 3.8+ ignores PATH for extension-module native deps —
+# os.add_dll_directory() is required. Also keep PATH for child processes/ffmpeg.
+if sys.platform == "win32":
+    _site_packages = os.path.join(sys.prefix, "Lib", "site-packages")
+    _venv_site_packages = os.path.join(project_root, "venv", "Lib", "site-packages")
+    for _sp in (_site_packages, _venv_site_packages):
+        _candidate_dirs = []
+        _torch_lib = os.path.join(_sp, "torch", "lib")
+        if os.path.isdir(_torch_lib):
+            _candidate_dirs.append(_torch_lib)
+        _nvidia_dir = os.path.join(_sp, "nvidia")
+        if os.path.isdir(_nvidia_dir):
+            for _pkg in os.listdir(_nvidia_dir):
+                _bin_dir = os.path.join(_nvidia_dir, _pkg, "bin")
+                if os.path.isdir(_bin_dir):
+                    _candidate_dirs.append(_bin_dir)
+        for _d in _candidate_dirs:
+            os.environ["PATH"] = _d + os.pathsep + os.environ["PATH"]
+            try:
+                os.add_dll_directory(_d)
+            except (OSError, AttributeError):
+                pass
 
-# Import the face_swapper injector so advanced blending is applied (monkey-patch)
-try:
-    import modules.face_swapper_inject  # noqa: F401
-except Exception:
-    # injector may be optional for smoke-test
-    pass
-
-# Import embedded advanced controls UI so it attaches to the main window
-try:
-    import modules.advanced_controls_embed  # noqa: F401
-except Exception:
-    pass
-
-# Core application runtime
-import core
-
-
-def compute_file_sha256(path: str) -> str:
-    h = hashlib.sha256()
-    with open(path, 'rb') as f:
-        for chunk in iter(lambda: f.read(8192), b''):
-            h.update(chunk)
-    return h.hexdigest()
-
-
-def load_manifest(manifest_path: str):
+    # On Windows, register OpenVINO DLL directories so onnxruntime's
+    # OpenVINOExecutionProvider can find openvino.dll.  This must happen
+    # before any ONNX InferenceSession is created.  Failure is non-fatal:
+    # OpenVINO simply isn't installed, and onnxruntime will fall back to CPU.
     try:
-        with open(manifest_path, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception:
-        return None
+        from onnxruntime.tools.add_openvino_win_libs import (  # type: ignore[import-untyped]  # noqa: E501
+            add_openvino_libs_to_path,
+        )
+        add_openvino_libs_to_path()
+    except ImportError:
+        # onnxruntime build without the OpenVINO tooling module — no-op.
+        pass
+    except FileNotFoundError:
+        # OpenVINO site-packages dir absent — no-op.
+        pass
+    except SystemExit as exc:
+        # add_openvino_libs_to_path() calls sys.exit() when OpenVINO libs
+        # can't be located (e.g. OPENVINO_LIB_PATHS unset).  Log the message
+        # it raised with so the failure is visible, but keep startup alive.
+        print(
+            f"[startup] OpenVINO DLL registration skipped: {exc}",
+            flush=True,
+        )
 
-
-def smoke_test():
-    failures = []
-    warnings = []
-
-    print('Smoke test: starting packaged-environment validation')
-
-    # 1) Imports of new/standalone/advanced modules
-    modules_to_check = [
-        'modules.advanced_face_controls',
-        'modules.advanced_controls_config',
-        'modules.face_swapper_inject',
-        'modules.advanced_controls_embed',
-        'modules.pasteback',
-        'modules.enhancer',
-        'modules.face_state',
-        'modules.profile_manager',
-        'modules.auto_tuner',
-        'modules.hw_tuner',
+# On Linux, pre-load NVIDIA shared libraries (cuDNN, cuBLAS, nvrtc...) shipped
+# inside the venv via pip wheels (nvidia-cudnn-cu12, etc.). LD_LIBRARY_PATH
+# cannot be set after Python starts, so we use ctypes.CDLL with RTLD_GLOBAL
+# instead. This makes symbols available to onnxruntime when it dlopens its
+# CUDA provider.
+if sys.platform.startswith("linux"):
+    import ctypes
+    import glob
+    _py_lib = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    _site_packages_candidates = [
+        os.path.join(project_root, "venv", "lib", _py_lib, "site-packages"),
+        os.path.join(sys.prefix, "lib", _py_lib, "site-packages"),
     ]
-    for m in modules_to_check:
-        try:
-            __import__(m)
-            print(f'Import OK: {m}')
-        except Exception:
-            tb = traceback.format_exc()
-            print(f'Import FAILED: {m}\n{tb}')
-            failures.append(f'Import failed: {m}')
-
-    # 2) Model/resource manifest checks
-    repo_root = os.path.dirname(os.path.abspath(__file__))
-    manifest_path = os.path.join(repo_root, 'models', 'manifest.json')
-    manifest = load_manifest(manifest_path)
-    if manifest is None:
-        failures.append(f'Manifest not found or invalid JSON: {manifest_path}')
-    else:
-        print(f'Loaded manifest with {len(manifest.get("models", []))} entries')
-        for entry in manifest.get('models', []):
-            name = entry.get('name')
-            url = entry.get('url', '')
-            filename = entry.get('filename', '')
-            sha256 = entry.get('sha256', '')
-            license = entry.get('license', '')
-            redistributable = entry.get('redistributable', False)
-
-            # Basic placeholder detection
-            if not url or 'example.com' in url or 'insert' in url or url.strip().endswith('/'):
-                failures.append(f'Manifest entry {name} has placeholder or invalid URL: {url}')
-            if not filename:
-                failures.append(f'Manifest entry {name} missing filename')
-            if not sha256:
-                failures.append(f'Manifest entry {name} missing sha256')
-            if not license or 'verify' in str(license).lower() or '?' in str(license):
-                failures.append(f'Manifest entry {name} has unverified license: {license}')
-            if not bool(redistributable):
-                failures.append(f'Manifest entry {name} not marked redistributable')
-
-            # If model file is present in models/, compute sha and compare
-            model_file_path = os.path.join(repo_root, 'models', filename)
-            if os.path.exists(model_file_path):
+    for _sp in _site_packages_candidates:
+        _nvidia_dir = os.path.join(_sp, "nvidia")
+        if not os.path.isdir(_nvidia_dir):
+            continue
+        for _pkg in os.listdir(_nvidia_dir):
+            _lib_dir = os.path.join(_nvidia_dir, _pkg, "lib")
+            if not os.path.isdir(_lib_dir):
+                continue
+            # Also expose the directory to child processes, without
+            # duplicating an entry that is already present.
+            _ldp = os.environ.get("LD_LIBRARY_PATH", "")
+            if _lib_dir not in _ldp.split(os.pathsep):
+                os.environ["LD_LIBRARY_PATH"] = (
+                    _lib_dir + (os.pathsep + _ldp if _ldp else "")
+                )
+            for _so in sorted(glob.glob(os.path.join(_lib_dir, "lib*.so*"))):
                 try:
-                    actual_sha = compute_file_sha256(model_file_path)
-                    print(f'Model {name} found locally, sha256={actual_sha}')
-                    if sha256 and actual_sha.lower() != sha256.lower():
-                        failures.append(f'Model {name} local file sha256 mismatch: manifest={sha256} actual={actual_sha}')
-                except Exception as e:
-                    failures.append(f'Failed to compute sha256 for {model_file_path}: {e}')
-            else:
-                warnings.append(f'Model {name} not included in package (file {model_file_path} not found)')
+                    ctypes.CDLL(_so, mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    pass
+        break
 
-    # 3) ONNX Runtime providers
-    try:
-        import onnxruntime as ort
-        providers = ort.get_available_providers()
-        print('ONNX Runtime providers available:', providers)
-        if not providers:
-            warnings.append('ONNX Runtime is installed but no providers available')
-    except Exception as e:
-        warnings.append(f'ONNX Runtime not available: {e}')
+from modules import platform_info
+platform_info.print_banner()
 
-    # 4) Optional enhancer availability
-    try:
-        import gfpgan  # type: ignore
-        print('GFPGAN package available')
-    except Exception:
-        warnings.append('GFPGAN not available')
-
-    # 5) Config/profile path creation
-    try:
-        home = os.path.expanduser('~')
-        cfg_path = os.path.join(home, '.deeplivecam_advanced_controls.json')
-        profiles_dir = os.path.join(home, '.deeplivecam_profiles')
-        # Ensure profile dir exists
-        os.makedirs(profiles_dir, exist_ok=True)
-        # Touch config file if missing
-        if not os.path.exists(cfg_path):
-            with open(cfg_path, 'w', encoding='utf-8') as f:
-                f.write('{}')
-        print('Config and profile paths verified:', cfg_path, profiles_dir)
-    except Exception as e:
-        failures.append(f'Failed to create config/profile paths: {e}')
-
-    # Summary
-    print('\nSmoke test summary:')
-    for w in warnings:
-        print('WARNING:', w)
-    for f in failures:
-        print('FAIL:', f)
-
-    if failures:
-        print('Smoke test FAILED')
-        return 2
-    else:
-        print('Smoke test PASSED')
-        return 0
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--smoke-test', action='store_true', help='Run packaged-build smoke tests and exit')
-    args = parser.parse_args()
-
-    if args.smoke_test:
-        rc = smoke_test()
-        sys.exit(rc)
-
-    # Normal application run
-    core.run()
-
+from modules import core
 
 if __name__ == '__main__':
-    main()
+    core.run()
