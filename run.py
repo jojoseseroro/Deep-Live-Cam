@@ -6,6 +6,12 @@ import tkinter_fix  # noqa: F401
 # Import standalone defaults and hardware probe
 import modules.standalone_apply  # applies presets and sets globals defaults
 
+# Import the face_swapper injector so advanced blending is applied (monkey-patch)
+try:
+    import modules.face_swapper_inject  # noqa: F401
+except Exception:
+    pass
+
 import core
 
 if __name__ == '__main__':
