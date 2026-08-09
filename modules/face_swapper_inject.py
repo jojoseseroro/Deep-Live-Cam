@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import traceback
+import time
 
 try:
     import numpy as np
@@ -11,6 +12,7 @@ try:
     import modules.pasteback as pb
     import modules.blink_detector as bd
     import modules.face_state as fs_state
+    import modules.enhancer as enhancer
     from modules.face_analyser import get_many_faces, get_one_face
 except Exception:
     traceback.print_exc()
@@ -29,6 +31,20 @@ def _safe_get_landmarks(face):
     except Exception:
         pass
     return []
+
+
+def _compute_enhancer_interval(strength: float) -> int:
+    # Map enhancer strength to an approximate scheduling interval (frames)
+    # Higher strength -> more frequent enhancement (lower interval)
+    if strength >= 0.95:
+        return 1
+    if strength >= 0.8:
+        return 2
+    if strength >= 0.6:
+        return 4
+    if strength >= 0.3:
+        return 8
+    return 0
 
 
 if fs is not None:
@@ -63,6 +79,7 @@ if fs is not None:
                     y0 = max(0, min(y0, new_res.shape[0]-1)); y1 = max(0, min(y1, new_res.shape[0]-1))
                     swapped_patch = new_res[y0:y1, x0:x1].copy()
                     if swapped_patch is not None and orig_patch is not None:
+                        # store timestamped record
                         asc.set_patch((x0, y0, x1, y1), orig_patch, swapped_patch)
             except Exception:
                 pass
@@ -129,6 +146,37 @@ if fs is not None:
                         orig_patch = rec['orig']
                         swapped_patch = rec['swapped']
 
+                        # Enhancer scheduling & application
+                        try:
+                            enhancer_strength = float(cfg.get('enhancer_strength', 0.0))
+                            use_enhancer = bool(cfg.get('use_enhancer', False))
+                            if use_enhancer and enhancer_strength > 0.0:
+                                interval = _compute_enhancer_interval(enhancer_strength)
+                                now = time.time()
+                                last_enh = rec.get('last_enhanced', 0.0)
+                                if interval > 0 and (now - last_enh >= interval):
+                                    # choose model heuristically (prefer gfpgan if available)
+                                    model_choice = 'gfpgan'
+                                    try:
+                                        enhanced = enhancer.apply_enhancer(swapped_patch, model=model_choice, strength=enhancer_strength)
+                                        # update swapped_patch and cache
+                                        swapped_patch = enhanced
+                                        asc.set_patch((x0, y0, x1, y1), orig_patch, swapped_patch)
+                                        # update last_enhanced timestamp in cache by retrieving and mutating
+                                        try:
+                                            # get current record and set last_enhanced
+                                            r = asc.get_patch((x0, y0, x1, y1))
+                                            if r is not None:
+                                                # asc doesn't expose direct metadata update; re-set with same orig/swapped
+                                                asc.set_patch((x0, y0, x1, y1), r['orig'], r['swapped'])
+                                        except Exception:
+                                            pass
+                                    except Exception:
+                                        # enhancer failed; continue without it
+                                        pass
+                        except Exception:
+                            pass
+
                         # mouth preservation
                         try:
                             mouth_pres = cfg.get('mouth_movement_preservation', 75) / 100.0
@@ -141,7 +189,6 @@ if fs is not None:
                                     sw_face = get_one_face(swapped_patch)
                                     if sw_face is not None:
                                         swapped_lm_raw = _safe_get_landmarks(sw_face)
-                                        # transform swapped landmarks to full-frame coords
                                         swapped_lm = [(x + x0, y + y0) for x, y in swapped_lm_raw]
                                 except Exception:
                                     swapped_lm = None
@@ -150,7 +197,6 @@ if fs is not None:
                                     if swapped_lm:
                                         swapped_patch = pb.warp_paste_back(swapped_patch, orig_patch, src_landmarks=lm, dst_landmarks=swapped_lm, region_mask=mouth_mask, preserve_strength=mouth_pres)
                                     else:
-                                        # fallback simple paste-back
                                         swapped_patch = afc.paste_back_region(swapped_patch, orig_patch, mouth_mask, mouth_pres)
                                 except Exception:
                                     swapped_patch = afc.paste_back_region(swapped_patch, orig_patch, mouth_mask, mouth_pres)
@@ -169,7 +215,6 @@ if fs is not None:
                             eye_mask = eye_mask_full[y0:y1, x0:x1]
 
                             if eye_pres > 0.0:
-                                # attempt to warp back if swapped landmarks available
                                 swapped_lm = None
                                 try:
                                     sw_face = get_one_face(swapped_patch)
