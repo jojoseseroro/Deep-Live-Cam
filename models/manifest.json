@@ -36,7 +36,7 @@
     {
       "name": "realesrgan_x4plus",
       "filename": "RealESRGAN_x4plus.pth",
-      "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/RealESRGAN_x4plus.pth",
+      "url": "https://huggingface.co/amd/realesrgan-x4plus/resolve/main/RealESRGAN_x4plus.pth",
       "sha256": "",
       "license": "BSD-3-Clause (Real-ESRGAN repository)",
       "license_source": "https://github.com/xinntao/Real-ESRGAN",
