@@ -14,7 +14,7 @@
     {
       "name": "retinaface_det_10g",
       "filename": "det_10g.onnx",
-      "url": "https://huggingface.co/antoinelame/insightface/resolve/main/detmodels/det_10g.onnx",
+      "url": "https://github.com/trevorhobenshield/RetinaFaceJS/raw/main/det_10g.onnx",
       "sha256": "",
       "license": "Likely Apache-2.0 or MIT depending on upstream distribution; see license_source",
       "license_source": "https://github.com/deepinsight/insightface",
