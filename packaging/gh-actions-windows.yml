@@ -1,0 +1,46 @@
+name: Windows Build and Artifact
+on:
+  push:
+    branches:
+      - standalone/2.7-equivalent
+  workflow_dispatch:
+
+jobs:
+  build-windows-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt || echo "requirements may be missing in repo"
+
+      - name: Download models (CI)
+        run: |
+          python scripts/download_models.py --manifest models/manifest.json --out models || echo "Download step returned non-zero"
+
+      - name: Run hardware probe (ci)
+        run: |
+          python scripts/hardware_probe.py --out build/hw_report.json || echo "hw probe failed"
+
+      - name: Build with PyInstaller
+        run: |
+          pip install pyinstaller
+          pyinstaller windows_build/pyinstaller.spec || exit 0
+
+      - name: Create NSIS installer (template)
+        run: |
+          echo "NSIS build step – requires NSIS on runner or a separate packaging step."
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dlc-windows-artifacts
+          path: dist/

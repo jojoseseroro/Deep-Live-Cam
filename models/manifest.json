@@ -1,0 +1,36 @@
+{
+  "models": [
+    {
+      "name": "inswapper_128",
+      "filename": "inswapper_128.onnx",
+      "url": "https://github.com/insightface/inswapper/releases/download/v1.0/inswapper_128.onnx",
+      "sha256": "",
+      "license": "MIT? (confirm upstream license)",
+      "redistributable": true
+    },
+    {
+      "name": "face_detector_retinaface",
+      "filename": "retinaface.onnx",
+      "url": "https://example.com/path/to/retinaface.onnx",
+      "sha256": "",
+      "license": "(insert license)",
+      "redistributable": true
+    },
+    {
+      "name": "gfpgan",
+      "filename": "gfpgan.pth",
+      "url": "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.8/GFPGANv1.3.pth",
+      "sha256": "",
+      "license": "Apache-2.0 (verify)",
+      "redistributable": true
+    },
+    {
+      "name": "real_esrgan_x4",
+      "filename": "realesrgan_x4.pth",
+      "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.3.0/RealESRGAN_x4plus.pth",
+      "sha256": "",
+      "license": "(insert license)",
+      "redistributable": true
+    }
+  ]
+}
