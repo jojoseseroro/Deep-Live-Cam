@@ -1,10 +1,8 @@
-"""Enhancer wrapper to apply GFPGAN / Real-ESRGAN or fallback.
+"""Enhancer wrapper to apply GFPGAN / Real-ESRGAN with region-limited processing.
 
-Provides an interface apply_enhancer(patch, model='gfpgan', strength=0.5, region_mask=None)
-which returns an enhanced patch. If models are not installed, returns original.
-This implementation supports optional region-limited enhancement: the enhancer
-is applied to the full patch if required by the model, but only the masked
-areas are blended into the original according to strength.
+This version attempts to limit enhancer computation to the masked bounding box to
+save compute. If enhancer package is not available or the bounding box is too
+small, it falls back to whole-patch processing or a no-op.
 """
 from __future__ import annotations
 
@@ -12,52 +10,78 @@ import time
 from typing import Tuple
 
 
+def _bbox_from_mask(mask):
+    import numpy as np
+    ys, xs = np.where(mask > 0.01)
+    if len(xs) == 0 or len(ys) == 0:
+        return None
+    x0, x1 = int(xs.min()), int(xs.max())
+    y0, y1 = int(ys.min()), int(ys.max())
+    return x0, y0, x1 + 1, y1 + 1
+
+
 def apply_enhancer(patch, model: str = 'gfpgan', strength: float = 0.5, region_mask=None):
-    """Apply enhancer to a single patch. strength in [0,1] controls interpolation.
+    """Apply enhancer to a patch with optional region_mask.
 
-    If region_mask is provided (HxW float32 0..1), the enhancer's output is
-    blended into the patch only in the masked region according to strength.
+    If region_mask is provided, try to crop to its bounding box and run enhancer
+    on the crop. Then blend enhanced crop back into patch according to mask*strength.
 
-    If the requested model isn't available, this is a no-op.
+    If enhancer model is not available, return original patch.
     """
     try:
         import numpy as np
-        # If no enhancement requested, return original
+        import cv2
+
         if strength <= 0.0:
             return patch
-        # Lazy imports for optional enhancers
-        if model.lower() in ('gfpgan', 'gfpganv1'):
+
+        # If no region mask or mask is trivial, fall back to full patch enhancement
+        if region_mask is None:
+            # full patch enhancement
             try:
-                # Attempt to import GFPGAN interface if present
-                # This is conservative: if import fails, fallback to no-op
                 from gfpgan import GFPGANer  # type: ignore
                 enhancer = GFPGANer()
                 _, enhanced, _ = enhancer.enhance(patch, has_aligned=False, only_center_face=False, paste_back=False)
-                # If region_mask provided, blend only masked area
-                if region_mask is not None:
-                    # Resize mask to patch if needed
-                    if region_mask.shape != patch.shape[:2]:
-                        import cv2
-                        mask_rs = cv2.resize(region_mask, (patch.shape[1], patch.shape[0]), interpolation=cv2.INTER_LINEAR)
-                    else:
-                        mask_rs = region_mask
-                    alpha = np.expand_dims(np.clip(mask_rs.astype('float32') * strength, 0.0, 1.0), axis=2)
-                    out = (enhanced.astype('float32') * alpha + patch.astype('float32') * (1.0 - alpha)).astype('uint8')
-                    return out
-                else:
-                    out = (enhanced.astype('float32') * strength + patch.astype('float32') * (1.0 - strength)).astype('uint8')
-                    return out
-            except Exception:
-                # GFPGAN not available or failed — fallback
-                return patch
-        elif model.lower().startswith('realesrgan') or model.lower() == 'realesrgan':
-            try:
-                # Real-ESRGAN integration placeholder — actual integration requires package
-                # For safety, return patch
-                return patch
+                out = (enhanced.astype('float32') * strength + patch.astype('float32') * (1.0 - strength)).astype('uint8')
+                return out
             except Exception:
                 return patch
-        else:
+
+        # Compute bounding box of the mask to limit enhancer scope
+        bbox = _bbox_from_mask(region_mask)
+        if bbox is None:
             return patch
+        x0, y0, x1, y1 = bbox
+        # Small region: if area too small, skip enhancer
+        h = y1 - y0
+        w = x1 - x0
+        if h < 16 or w < 16:
+            return patch
+
+        # Crop the patch and the mask to bbox coordinates (patch coords)
+        crop = patch[y0:y1, x0:x1]
+        crop_mask = region_mask[y0:y1, x0:x1]
+
+        # Try enhancer on crop
+        try:
+            from gfpgan import GFPGANer  # type: ignore
+            enhancer_inst = GFPGANer()
+            _, enhanced_crop, _ = enhancer_inst.enhance(crop, has_aligned=False, only_center_face=False, paste_back=False)
+            # Blend enhanced_crop into original patch using crop_mask
+            alpha = np.expand_dims(np.clip(crop_mask.astype('float32') * strength, 0.0, 1.0), axis=2)
+            blended_crop = (enhanced_crop.astype('float32') * alpha + crop.astype('float32') * (1.0 - alpha)).astype('uint8')
+            out = patch.copy()
+            out[y0:y1, x0:x1] = blended_crop
+            return out
+        except Exception:
+            # enhancer not available or failed on crop; fallback to full-patch attempt
+            try:
+                from gfpgan import GFPGANer  # type: ignore
+                enhancer = GFPGANer()
+                _, enhanced, _ = enhancer.enhance(patch, has_aligned=False, only_center_face=False, paste_back=False)
+                out = (enhanced.astype('float32') * strength + patch.astype('float32') * (1.0 - strength)).astype('uint8')
+                return out
+            except Exception:
+                return patch
     except Exception:
         return patch
