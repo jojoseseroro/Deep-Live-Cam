@@ -27,8 +27,9 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
+          pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python opencv-contrib-python-headless
           pip install -r requirements.txt
-          pip install pyinstaller==5.11.0
+          pip install pyinstaller pyinstaller-hooks-contrib
           pip install requests cryptography
           pip install onnxruntime-gpu --quiet
           if ($LASTEXITCODE -ne 0) {
@@ -36,6 +37,16 @@ jobs:
             pip install onnxruntime
           } else {
             Write-Host "onnxruntime-gpu installed"
+          }
+
+      - name: Verify OpenCV import before PyInstaller
+        shell: pwsh
+        run: |
+          Write-Host "Verifying cv2 import before packaging..."
+          python -c "import cv2; print(cv2.__file__); print(cv2.__version__)"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "cv2 import failed before PyInstaller"
+            exit $LASTEXITCODE
           }
 
       - name: Read and validate models manifest (pre-download)
@@ -193,7 +204,8 @@ jobs:
             '--onefile',
             '--paths', '.',
             '--collect-all', 'cv2',
-            '--add-data', 'modules;modules'
+            '--add-data', 'modules;modules',
+            '--log-level', 'INFO'
           )
 
           foreach ($h in $hiddenImports) {
@@ -208,6 +220,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             Write-Error "PyInstaller build failed with exit code $LASTEXITCODE"
             exit $LASTEXITCODE
+          }
+
+      - name: Check PyInstaller log for cv2 hook
+        shell: pwsh
+        run: |
+          Write-Host "Checking PyInstaller warnings for cv2 hook activity..."
+          $warnFile = Join-Path $PWD 'build\run\warn-run.txt'
+          if (Test-Path $warnFile) {
+            Get-Content $warnFile | Select-String 'cv2|hook-cv2' -SimpleMatch | ForEach-Object { $_.Line }
+          } else {
+            Write-Host "PyInstaller warning file not found; continuing"
           }
 
       - name: Assemble portable directory (include redistributable models & metadata)
