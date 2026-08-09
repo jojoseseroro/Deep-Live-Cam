@@ -172,6 +172,7 @@ jobs:
           Remove-Item -Recurse -Force -ErrorAction SilentlyContinue .\dist, .\build, .\run.spec
 
           $hiddenImports = @(
+            'core',
             'modules.advanced_controls_embed',
             'modules.advanced_face_controls',
             'modules.advanced_controls_config',
@@ -182,12 +183,14 @@ jobs:
             'modules.profile_manager',
             'modules.auto_tuner',
             'modules.hw_tuner',
-            'modules.preset_manager'
+            'modules.preset_manager',
+            'modules.standalone_apply'
           )
 
           $args = @(
             '--noconfirm',
             '--onefile',
+            '--paths', '.',
             '--add-data', 'modules;modules'
           )
 
