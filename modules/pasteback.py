@@ -40,25 +40,31 @@ def warp_patch_to_target(src_patch: np.ndarray, M: np.ndarray, output_shape: Tup
     return warped
 
 
-def warp_paste_back(swapped_patch: np.ndarray, orig_patch: np.ndarray, src_landmarks: List[Tuple[float, float]], dst_landmarks: List[Tuple[float, float]], region_mask: np.ndarray, preserve_strength: float = 1.0) -> np.ndarray:
+def warp_paste_back(
+    swapped_patch: np.ndarray,
+    orig_patch: np.ndarray,
+    src_landmarks: List[Tuple[float, float]],
+    dst_landmarks: List[Tuple[float, float]],
+    region_mask: np.ndarray,
+    preserve_strength: float = 1.0,
+) -> np.ndarray:
     """Warp orig_patch to swapped_patch geometry and blend according to region_mask.
 
     src_landmarks: landmarks on the original (target) face used to compute warp (full-frame coords)
     dst_landmarks: landmarks corresponding to the swapped face (full-frame coords)
     region_mask: mask cropped to patch coordinates, float32 [0,1]
+    preserve_strength: how strongly to preserve the original patch in masked region
     """
     try:
         if swapped_patch is None or orig_patch is None:
             return swapped_patch
         h, w = swapped_patch.shape[:2]
         indices = _get_mouth_landmark_indices()
-        # Transform indices from full-frame coords to patch-local coords
-        # Expect src_landmarks/dst_landmarks in full-frame coordinates; user should pass proper points
-        # For simplicity, we use the absolute coords and compute affine directly
+        # For simplicity, we estimate an affine between src and dst landmarks
         M = estimate_affine_from_landmarks(src_landmarks, dst_landmarks, indices)
         if M is None:
-            # fallback: no warp
-            return pasted = _simple_paste_back(swapped_patch, orig_patch, region_mask, preserve_strength)
+            # fallback: no warp, use simple paste-back
+            return _simple_paste_back(swapped_patch, orig_patch, region_mask, preserve_strength)
         # Warp orig_patch to swapped_patch coordinates
         warped = warp_patch_to_target(orig_patch, M, (h, w))
         # Blend
@@ -75,11 +81,9 @@ def _simple_paste_back(swapped_patch: np.ndarray, orig_patch: np.ndarray, region
     # Simple resize & blend
     try:
         if swapped_patch.shape != orig_patch.shape:
-            import cv2
             orig_rs = cv2.resize(orig_patch, (swapped_patch.shape[1], swapped_patch.shape[0]), interpolation=cv2.INTER_LINEAR)
         else:
             orig_rs = orig_patch
-        import numpy as np
         alpha = region_mask.astype('float32') * float(preserve_strength)
         alpha3 = np.expand_dims(alpha, axis=2)
         blended = (orig_rs.astype('float32') * alpha3 + swapped_patch.astype('float32') * (1.0 - alpha3)).astype('uint8')
