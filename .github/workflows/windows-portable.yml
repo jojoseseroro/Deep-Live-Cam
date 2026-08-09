@@ -172,7 +172,8 @@ jobs:
           Remove-Item -Recurse -Force -ErrorAction SilentlyContinue .\dist, .\build, .\run.spec
 
           $hiddenImports = @(
-            'core',
+            'modules.core',
+            'cv2',
             'modules.advanced_controls_embed',
             'modules.advanced_face_controls',
             'modules.advanced_controls_config',
@@ -191,6 +192,7 @@ jobs:
             '--noconfirm',
             '--onefile',
             '--paths', '.',
+            '--collect-all', 'cv2',
             '--add-data', 'modules;modules'
           )
 
