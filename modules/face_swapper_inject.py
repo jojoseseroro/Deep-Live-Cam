@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 import traceback
 
 try:
@@ -9,6 +8,10 @@ try:
     import modules.advanced_controls_config as acc
     import modules.processors.frame.face_swapper as fs
     import modules.advanced_swap_cache as asc
+    import modules.pasteback as pb
+    import modules.blink_detector as bd
+    import modules.face_state as fs_state
+    from modules.face_analyser import get_many_faces, get_one_face
 except Exception:
     traceback.print_exc()
     fs = None
@@ -34,7 +37,6 @@ if fs is not None:
         _orig_swap = fs.swap_face
 
         def _wrapped_swap_face(source_image, t_face, result_frame):
-            # Attempt to snapshot the target region before swapping
             try:
                 h, w = result_frame.shape[:2]
                 if hasattr(t_face, 'bbox') and t_face.bbox is not None:
@@ -47,14 +49,13 @@ if fs is not None:
             except Exception:
                 orig_patch = None
 
-            # Call the original swapper (it will paste the swapped face into result_frame)
+            # Call original swapper
             try:
                 new_res = _orig_swap(source_image, t_face, result_frame)
             except Exception:
-                # If original failed, return original result_frame
                 return result_frame
 
-            # After swap, extract the swapped patch and store in cache
+            # After swap, extract swapped patch and store in cache
             try:
                 if hasattr(t_face, 'bbox') and t_face.bbox is not None:
                     x0, y0, x1, y1 = [int(round(p)) for p in t_face.bbox[:4]]
@@ -83,27 +84,37 @@ if fs is not None:
                 cfg = acc.get_current()
                 if not cfg.get('advanced_enabled', True):
                     return res
-                # get detected faces
-                from modules.face_analyser import get_many_faces
+
+                # detect faces in the final frame to align operations
                 faces = None
                 try:
                     faces = get_many_faces(res)
                 except Exception:
                     faces = None
+
+                # publish face state for UI overlay
+                try:
+                    fs_state.set_last_faces(faces or [])
+                except Exception:
+                    pass
+
                 if faces:
+                    h, w = res.shape[:2]
                     for face in faces:
                         lm = _safe_get_landmarks(face)
                         if not lm:
                             continue
-                        h, w = res.shape[:2]
+
                         # Build strengths mapping from config
                         strengths = {}
                         for k, v in cfg.items():
                             if isinstance(v, (int, float)):
                                 strengths[k] = v / 100.0 if k not in ("blending_strength", "color_correction_strength", "enhancer_strength", "temporal_smoothing") else float(v)
-                        mask = afc.build_composite_alpha((h, w), lm, strengths, mask_size=cfg.get('mask_size',100)/100.0, mask_feather=int(cfg.get('mask_feathering',16)))
 
-                        # retrieve cached patches by bbox
+                        # Compose full-frame composite mask
+                        mask = afc.build_composite_alpha((h, w), lm, strengths, mask_size=cfg.get('mask_size', 100)/100.0, mask_feather=int(cfg.get('mask_feathering', 16)))
+
+                        # retrieve cached swapped patch by bbox
                         try:
                             x0, y0, x1, y1 = [int(round(p)) for p in face.bbox[:4]]
                             x0 = max(0, min(x0, w-1)); x1 = max(0, min(x1, w-1))
@@ -112,39 +123,80 @@ if fs is not None:
                         except Exception:
                             rec = None
 
-                        if rec is not None:
-                            orig_patch = rec['orig']
-                            swapped_patch = rec['swapped']
-                            # Apply preservation paste-back if requested
+                        if rec is None:
+                            continue
+
+                        orig_patch = rec['orig']
+                        swapped_patch = rec['swapped']
+
+                        # mouth preservation
+                        try:
                             mouth_pres = cfg.get('mouth_movement_preservation', 75) / 100.0
-                            eye_pres = cfg.get('eye_blink_preservation', 80) / 100.0
-                            teeth_pres = cfg.get('teeth_preservation', 80) / 100.0
-                            # Example: if mouth preservation high, blend orig into swapped in mouth region
-                            # Build mouth mask for the patch coordinates
-                            try:
-                                # compute full-frame mouth mask and crop to patch
-                                mouth_mask_full = afc.build_composite_alpha((h, w), lm, {'mouth': 1.0}, mask_size=cfg.get('mask_size',100)/100.0, mask_feather=int(cfg.get('mask_feathering',16)))
-                                mouth_mask = mouth_mask_full[y0:y1, x0:x1]
-                                if mouth_pres > 0.0:
-                                    # paste-back blended
+                            mouth_mask_full = afc.build_composite_alpha((h, w), lm, {'mouth': 1.0}, mask_size=cfg.get('mask_size', 100)/100.0, mask_feather=int(cfg.get('mask_feathering', 16)))
+                            mouth_mask = mouth_mask_full[y0:y1, x0:x1]
+                            if mouth_pres > 0.0:
+                                # Attempt to compute swapped-landmarks for better warp alignment
+                                swapped_lm = None
+                                try:
+                                    sw_face = get_one_face(swapped_patch)
+                                    if sw_face is not None:
+                                        swapped_lm_raw = _safe_get_landmarks(sw_face)
+                                        # transform swapped landmarks to full-frame coords
+                                        swapped_lm = [(x + x0, y + y0) for x, y in swapped_lm_raw]
+                                except Exception:
+                                    swapped_lm = None
+
+                                try:
+                                    if swapped_lm:
+                                        swapped_patch = pb.warp_paste_back(swapped_patch, orig_patch, src_landmarks=lm, dst_landmarks=swapped_lm, region_mask=mouth_mask, preserve_strength=mouth_pres)
+                                    else:
+                                        # fallback simple paste-back
+                                        swapped_patch = afc.paste_back_region(swapped_patch, orig_patch, mouth_mask, mouth_pres)
+                                except Exception:
                                     swapped_patch = afc.paste_back_region(swapped_patch, orig_patch, mouth_mask, mouth_pres)
+                        except Exception:
+                            pass
+
+                        # eye/eyelid preservation with blink-awareness
+                        try:
+                            eye_pres = cfg.get('eye_blink_preservation', 80) / 100.0
+                            is_blink = bd.is_blinking(lm)
+                            if is_blink:
+                                # If blinking, favor preserving the live eye pixels strongly
+                                eye_pres = max(eye_pres, 0.95)
+
+                            eye_mask_full = afc.build_composite_alpha((h, w), lm, {'upper_eyelids': 1.0, 'lower_eyelids': 1.0, 'eyes': 1.0}, mask_size=cfg.get('mask_size', 100)/100.0, mask_feather=int(cfg.get('mask_feathering', 12)))
+                            eye_mask = eye_mask_full[y0:y1, x0:x1]
+
+                            if eye_pres > 0.0:
+                                # attempt to warp back if swapped landmarks available
+                                swapped_lm = None
+                                try:
+                                    sw_face = get_one_face(swapped_patch)
+                                    if sw_face is not None:
+                                        swapped_lm_raw = _safe_get_landmarks(sw_face)
+                                        swapped_lm = [(x + x0, y + y0) for x, y in swapped_lm_raw]
+                                except Exception:
+                                    swapped_lm = None
+
+                                if swapped_lm:
+                                    swapped_patch = pb.warp_paste_back(swapped_patch, orig_patch, src_landmarks=lm, dst_landmarks=swapped_lm, region_mask=eye_mask, preserve_strength=eye_pres)
+                                else:
+                                    swapped_patch = afc.paste_back_region(swapped_patch, orig_patch, eye_mask, eye_pres)
+                        except Exception:
+                            pass
+
+                        # Now blend swapped_patch onto result using composite region mask
+                        try:
+                            region_mask = mask[y0:y1, x0:x1]
+                            blended = afc.apply_region_blend(swapped_patch, orig_patch, region_mask)
+                            res[y0:y1, x0:x1] = blended
+                        except Exception:
+                            try:
+                                res[y0:y1, x0:x1] = swapped_patch
                             except Exception:
                                 pass
 
-                            # Now blend swapped_patch onto res using composite mask
-                            try:
-                                region_mask = mask[y0:y1, x0:x1]
-                                blended = afc.apply_region_blend(swapped_patch, orig_patch, region_mask)
-                                res[y0:y1, x0:x1] = blended
-                            except Exception:
-                                # fallback: write swapped patch
-                                try:
-                                    res[y0:y1, x0:x1] = swapped_patch
-                                except Exception:
-                                    pass
-                        else:
-                            # no cached swapped patch; fallback no-op
-                            pass
                 return res
             except Exception:
                 traceback.print_exc()
