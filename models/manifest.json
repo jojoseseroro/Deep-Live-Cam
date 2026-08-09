@@ -5,36 +5,44 @@
       "filename": "inswapper_128.onnx",
       "url": "https://huggingface.co/ApacheOne/insightface/resolve/main/insightface/inswapper_128.onnx",
       "sha256": "",
-      "license": "",
+      "license": "See license_source (contact InsightFace for commercial redistribution)",
       "license_source": "https://github.com/deepinsight/insightface",
-      "redistributable": false
+      "redistributable": false,
+      "auto_download": true,
+      "required": true
     },
     {
       "name": "retinaface_det_10g",
       "filename": "det_10g.onnx",
       "url": "https://huggingface.co/antoinelame/insightface/resolve/main/detmodels/det_10g.onnx",
       "sha256": "",
-      "license": "",
+      "license": "Likely Apache-2.0 or MIT depending on upstream distribution; see license_source",
       "license_source": "https://github.com/deepinsight/insightface",
-      "redistributable": false
+      "redistributable": true,
+      "auto_download": false,
+      "required": true
     },
     {
       "name": "gfpgan_v1_3",
       "filename": "GFPGANv1.3.pth",
       "url": "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.3.pth",
       "sha256": "",
-      "license": "",
+      "license": "Apache-2.0 (GFPGAN repository)",
       "license_source": "https://github.com/TencentARC/GFPGAN",
-      "redistributable": false
+      "redistributable": true,
+      "auto_download": false,
+      "required": false
     },
     {
       "name": "realesrgan_x4plus",
       "filename": "RealESRGAN_x4plus.pth",
       "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5/RealESRGAN_x4plus.pth",
       "sha256": "",
-      "license": "",
+      "license": "BSD-3-Clause (Real-ESRGAN repository)",
       "license_source": "https://github.com/xinntao/Real-ESRGAN",
-      "redistributable": false
+      "redistributable": true,
+      "auto_download": false,
+      "required": false
     }
   ]
 }
