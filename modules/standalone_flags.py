@@ -1,19 +1,7 @@
-# Standalone flags and presets for DeepLiveCam
+# Extend presets to include a baseline advanced_controls mapping
 
-# This module is intentionally small and non-invasive. It defines defaults used by the standalone build.
+from typing import Dict
 
-standalone_mode = True
-
-# Model manifest path (relative to repository root)
-model_manifest_path = "models/manifest.json"
-
-# Installer behavior
-bundle_models_in_installer = True  # CI will download and embed redistributable models
-
-# Default UI flags
-no_watermark = True
-
-# Quality presets
 PRESETS = {
     "low_latency": {
         "resolution": "720p",
@@ -21,6 +9,34 @@ PRESETS = {
         "use_enhancer": False,
         "poisson_blend": False,
         "fp16": True,
+        "advanced_controls": {
+            "identity": 70,
+            "forehead": 60,
+            "eyebrows": 70,
+            "eyes": 80,
+            "upper_eyelids": 80,
+            "lower_eyelids": 80,
+            "nose": 70,
+            "cheeks": 60,
+            "cheekbones": 60,
+            "mouth": 40,
+            "jaw": 60,
+            "chin": 60,
+            "face_shape": 60,
+            "skin_texture": 50,
+            "color_matching": 60,
+            "hairline": 50,
+            "expression_preservation": 80,
+            "eye_blink_preservation": 80,
+            "mouth_movement_preservation": 90,
+            "teeth_preservation": 90,
+            "mask_size": 100,
+            "mask_feathering": 12,
+            "blending_strength": 0.8,
+            "color_correction_strength": 0.8,
+            "enhancer_strength": 0.5,
+            "temporal_smoothing": 0.7,
+        },
     },
     "balanced": {
         "resolution": "1080p",
@@ -28,6 +44,34 @@ PRESETS = {
         "use_enhancer": True,
         "poisson_blend": True,
         "fp16": True,
+        "advanced_controls": {
+            "identity": 85,
+            "forehead": 80,
+            "eyebrows": 85,
+            "eyes": 90,
+            "upper_eyelids": 85,
+            "lower_eyelids": 85,
+            "nose": 85,
+            "cheeks": 80,
+            "cheekbones": 80,
+            "mouth": 60,
+            "jaw": 80,
+            "chin": 80,
+            "face_shape": 80,
+            "skin_texture": 80,
+            "color_matching": 85,
+            "hairline": 70,
+            "expression_preservation": 70,
+            "eye_blink_preservation": 80,
+            "mouth_movement_preservation": 75,
+            "teeth_preservation": 80,
+            "mask_size": 100,
+            "mask_feathering": 16,
+            "blending_strength": 0.9,
+            "color_correction_strength": 0.9,
+            "enhancer_strength": 0.7,
+            "temporal_smoothing": 0.8,
+        },
     },
     "high_quality": {
         "resolution": "1080p",
@@ -35,6 +79,34 @@ PRESETS = {
         "use_enhancer": True,
         "poisson_blend": True,
         "fp16": True,
+        "advanced_controls": {
+            "identity": 92,
+            "forehead": 90,
+            "eyebrows": 92,
+            "eyes": 95,
+            "upper_eyelids": 92,
+            "lower_eyelids": 92,
+            "nose": 92,
+            "cheeks": 90,
+            "cheekbones": 90,
+            "mouth": 75,
+            "jaw": 90,
+            "chin": 90,
+            "face_shape": 90,
+            "skin_texture": 90,
+            "color_matching": 92,
+            "hairline": 85,
+            "expression_preservation": 60,
+            "eye_blink_preservation": 75,
+            "mouth_movement_preservation": 70,
+            "teeth_preservation": 80,
+            "mask_size": 105,
+            "mask_feathering": 18,
+            "blending_strength": 0.95,
+            "color_correction_strength": 0.95,
+            "enhancer_strength": 0.85,
+            "temporal_smoothing": 0.9,
+        },
     },
     "maximum": {
         "resolution": "4k",
@@ -42,5 +114,33 @@ PRESETS = {
         "use_enhancer": True,
         "poisson_blend": True,
         "fp16": True,
-    }
+        "advanced_controls": {
+            "identity": 100,
+            "forehead": 100,
+            "eyebrows": 100,
+            "eyes": 100,
+            "upper_eyelids": 100,
+            "lower_eyelids": 100,
+            "nose": 100,
+            "cheeks": 100,
+            "cheekbones": 100,
+            "mouth": 95,
+            "jaw": 100,
+            "chin": 100,
+            "face_shape": 100,
+            "skin_texture": 100,
+            "color_matching": 100,
+            "hairline": 100,
+            "expression_preservation": 40,
+            "eye_blink_preservation": 60,
+            "mouth_movement_preservation": 50,
+            "teeth_preservation": 60,
+            "mask_size": 110,
+            "mask_feathering": 22,
+            "blending_strength": 1.0,
+            "color_correction_strength": 1.0,
+            "enhancer_strength": 1.0,
+            "temporal_smoothing": 0.95,
+        },
+    },
 }
