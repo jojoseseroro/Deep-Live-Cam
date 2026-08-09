@@ -12,6 +12,12 @@ try:
 except Exception:
     pass
 
+# Import embedded advanced controls UI so it attaches to the main window
+try:
+    import modules.advanced_controls_embed  # noqa: F401
+except Exception:
+    pass
+
 import core
 
 if __name__ == '__main__':
