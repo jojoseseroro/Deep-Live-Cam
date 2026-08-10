@@ -1,0 +1,48 @@
+{
+  "models": [
+    {
+      "name": "inswapper_128",
+      "filename": "inswapper_128.onnx",
+      "url": "https://huggingface.co/ApacheOne/insightface/resolve/main/insightface/inswapper_128.onnx",
+      "sha256": "0fa95f167682b4f61edf24f8d66c46b4ab130e8be058f00c8150e6d0170ca72f",
+      "license": "See license_source (contact InsightFace for commercial redistribution)",
+      "license_source": "https://github.com/deepinsight/insightface",
+      "redistributable": false,
+      "auto_download": true,
+      "required": true
+    },
+    {
+      "name": "retinaface_det_10g",
+      "filename": "det_10g.onnx",
+      "url": "https://github.com/trevorhobenshield/RetinaFaceJS/raw/main/det_10g.onnx",
+      "sha256": "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91",
+      "license": "Likely Apache-2.0 or MIT depending on upstream distribution; see license_source",
+      "license_source": "https://github.com/deepinsight/insightface",
+      "redistributable": true,
+      "auto_download": false,
+      "required": true
+    },
+    {
+      "name": "gfpgan_v1_3",
+      "filename": "GFPGANv1.3.pth",
+      "url": "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.3.pth",
+      "sha256": "c953a88f2727c85c3d9ae72e2bd4846bbaf59fe6972ad94130e23e7017524a70",
+      "license": "Apache-2.0 (GFPGAN repository)",
+      "license_source": "https://github.com/TencentARC/GFPGAN",
+      "redistributable": true,
+      "auto_download": false,
+      "required": false
+    },
+    {
+      "name": "realesrgan_x4plus",
+      "filename": "RealESRGAN_x4plus.pth",
+      "url": "https://huggingface.co/amd/realesrgan-x4plus/resolve/main/RealESRGAN_x4plus.pth",
+      "sha256": "",
+      "license": "BSD-3-Clause (Real-ESRGAN repository)",
+      "license_source": "https://github.com/xinntao/Real-ESRGAN",
+      "redistributable": true,
+      "auto_download": false,
+      "required": false
+    }
+  ]
+}

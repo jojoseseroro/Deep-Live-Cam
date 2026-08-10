@@ -1,0 +1,330 @@
+name: Windows Portable Build
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - standalone/2.7-equivalent
+      - main
+
+jobs:
+  build-windows-portable:
+    name: Build Windows portable with PyInstaller (model pinning + portable assembly)
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Install prerequisites
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python opencv-contrib-python-headless
+          pip install -r requirements.txt
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "pip install -r requirements.txt failed (check requirements.txt for invalid entries)"
+            exit $LASTEXITCODE
+          }
+          pip install pyinstaller pyinstaller-hooks-contrib
+          pip install cryptography
+          pip install onnxruntime-gpu --quiet
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "onnxruntime-gpu install failed; falling back to onnxruntime"
+            pip install onnxruntime
+          } else {
+            Write-Host "onnxruntime-gpu installed"
+          }
+
+      - name: Verify OpenCV import before PyInstaller
+        shell: pwsh
+        run: |
+          Write-Host "Verifying cv2 import before packaging..."
+          python -c "import cv2; print(cv2.__file__); print(cv2.__version__)"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "cv2 import failed before PyInstaller"
+            exit $LASTEXITCODE
+          }
+
+      - name: Read and validate models manifest (pre-download)
+        shell: pwsh
+        run: |
+          Write-Host "Validating models/manifest.json placeholders..."
+          $manifestPath = Join-Path $PWD 'models\manifest.json'
+          if (-Not (Test-Path $manifestPath)) {
+            Write-Error "models/manifest.json not found"
+            exit 1
+          }
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          $err = $false
+          foreach ($m in $manifest.models) {
+            if ([string]::IsNullOrWhiteSpace($m.url) -or $m.url -match 'example.com' -or $m.url.Trim().EndsWith('/')) {
+              Write-Error "Manifest entry $($m.name) has placeholder or invalid URL: $($m.url)"
+              $err = $true
+            }
+            if (-not $m.filename) {
+              Write-Error "Manifest entry $($m.name) missing filename"
+              $err = $true
+            }
+            if (-not $m.license_source) {
+              Write-Host "Warning: Manifest entry $($m.name) missing license_source; manual review required"
+            }
+          }
+          if ($err) { exit 1 } else { Write-Host 'manifest looks syntactically OK' }
+
+      - name: Download models and compute checksums
+        shell: pwsh
+        run: |
+          Write-Host "Downloading models listed in models/manifest.json and computing SHA256..."
+          $manifestPath = Join-Path $PWD 'models\manifest.json'
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          $checksums = @{}
+          $licenseReport = New-Object System.Text.StringBuilder
+          $modelsDir = Join-Path $PWD 'models'
+          if (-Not (Test-Path $modelsDir)) { New-Item -ItemType Directory -Path $modelsDir | Out-Null }
+
+          foreach ($m in $manifest.models) {
+            $url = $m.url
+            $filename = $m.filename
+            $target = Join-Path $modelsDir $filename
+            Write-Host "Downloading $($m.name) from $url to $target"
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $target -UseBasicParsing -TimeoutSec 180
+            } catch {
+              Write-Error "Failed to download $url : $_"
+              exit 2
+            }
+            # Compute SHA256
+            $sha256 = (Get-FileHash -Algorithm SHA256 $target).Hash.ToLower()
+            $checksums[$filename] = $sha256
+            Write-Host "Downloaded $filename sha256=$sha256"
+            # Attempt to fetch license text from license_source if present
+            if ($m.license_source) {
+              $licenseUrl = $m.license_source
+              Write-Host "Fetching license/source page: $licenseUrl"
+              try {
+                $txt = (Invoke-WebRequest -Uri $licenseUrl -UseBasicParsing -TimeoutSec 60).Content
+                [void]$licenseReport.AppendLine("==== $($m.name) LICENSE_SOURCE: $licenseUrl ====")
+                [void]$licenseReport.AppendLine($txt.Substring(0,[math]::Min(2000,$txt.Length)))
+                [void]$licenseReport.AppendLine("`n")
+              } catch {
+                [void]$licenseReport.AppendLine("==== $($m.name) LICENSE_SOURCE FAILED: $licenseUrl : $_ ====")
+              }
+            }
+          }
+          # Write checksum report artifact
+          $checksumsPath = Join-Path $PWD 'models\\checksums.json'
+          $checksums | ConvertTo-Json | Out-File -FilePath $checksumsPath -Encoding utf8
+          $licenseReportPath = Join-Path $PWD 'models\\license_report.txt'
+          $licenseReport.ToString() | Out-File -FilePath $licenseReportPath -Encoding utf8
+          Write-Host 'Wrote checksums and license report'
+
+      - name: Pin checksums into manifest (sha only; do NOT change redistributable)
+        shell: pwsh
+        run: |
+          Write-Host "Pinning computed checksums into manifest (sha only; not altering redistributable flags)..."
+          $manifestPath = Join-Path $PWD 'models\manifest.json'
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          $checksums = Get-Content (Join-Path $PWD 'models\checksums.json') -Raw | ConvertFrom-Json
+          $changed = $false
+          foreach ($m in $manifest.models) {
+            $fn = $m.filename
+            if ($checksums.$fn) {
+              if (-not $m.sha256 -or $m.sha256.Trim().Length -eq 0 -or $m.sha256 -ne $checksums.$fn) {
+                $m.sha256 = $checksums.$fn
+                $changed = $true
+                Write-Host "Pinning sha for $($m.name): $($m.sha256)"
+              } else {
+                Write-Host "Manifest already has matching sha for $($m.name)"
+              }
+            } else {
+              Write-Error "Checksum for $fn not found; aborting"
+              exit 3
+            }
+          }
+          if ($changed) {
+            $manifest | ConvertTo-Json -Depth 6 | Out-File -FilePath $manifestPath -Encoding utf8
+            Write-Host 'Updated models/manifest.json with pinned sha256 values'
+          } else {
+            Write-Host 'No sha updates required'
+          }
+
+      - name: Upload model-check artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: models-checksums-and-licenses
+          path: |
+            models/checksums.json
+            models/license_report.txt
+            models/manifest.json
+
+      - name: Fail if any manifest entry still lacks sha (safety)
+        shell: pwsh
+        run: |
+          Write-Host "Checking manifest entries have sha256..."
+          $manifestPath = Join-Path $PWD 'models\manifest.json'
+          $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
+          $err = $false
+          foreach ($m in $manifest.models) {
+            if (-not $m.sha256 -or $m.sha256.Trim().Length -eq 0) {
+              Write-Error "Manifest entry $($m.name) missing pinned sha256; aborting packaging"
+              $err = $true
+            }
+          }
+          if ($err) { exit 4 } else { Write-Host 'All manifest entries have checksums' }
+
+      - name: Build with PyInstaller (include hidden imports for standalone modules)
+        shell: pwsh
+        run: |
+          Write-Host "Running PyInstaller..."
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue .\dist, .\build, .\run.spec
+
+          $hiddenImports = @(
+            'modules.core',
+            'cv2',
+            'modules.advanced_controls_embed',
+            'modules.advanced_face_controls',
+            'modules.advanced_controls_config',
+            'modules.face_swapper_inject',
+            'modules.pasteback',
+            'modules.enhancer',
+            'modules.face_state',
+            'modules.profile_manager',
+            'modules.auto_tuner',
+            'modules.hw_tuner',
+            'modules.preset_manager',
+            'modules.standalone_apply'
+          )
+
+          $pyinstallerArgs = @(
+            '--noconfirm',
+            '--onefile',
+            '--paths', '.',
+            '--collect-all', 'cv2',
+            '--add-data', 'modules;modules',
+            '--log-level', 'INFO'
+          )
+
+          foreach ($h in $hiddenImports) {
+            $pyinstallerArgs += '--hidden-import'
+            $pyinstallerArgs += $h
+          }
+
+          $pyinstallerArgs += 'run.py'
+
+          Write-Host "PyInstaller args: $pyinstallerArgs"
+          & pyinstaller @pyinstallerArgs
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "PyInstaller build failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+      - name: Check PyInstaller log for cv2 hook
+        shell: pwsh
+        run: |
+          Write-Host "Checking PyInstaller warnings for cv2 hook activity..."
+          $warnFile = Join-Path $PWD 'build\run\warn-run.txt'
+          if (Test-Path $warnFile) {
+            Get-Content $warnFile | Select-String 'cv2|hook-cv2' -SimpleMatch | ForEach-Object { $_.Line }
+          } else {
+            Write-Host "PyInstaller warning file not found; continuing"
+          }
+
+      - name: Assemble portable directory (include redistributable models & metadata)
+        shell: pwsh
+        run: |
+          Write-Host "Assembling dist\portable with exe and required runtime resources..."
+          $portableDir = Join-Path -Path $PWD -ChildPath "dist\portable"
+          if (Test-Path $portableDir) { Remove-Item -Recurse -Force $portableDir }
+          New-Item -ItemType Directory -Path $portableDir | Out-Null
+
+          # Ensure models directory exists inside portable dir before copying files
+          $portableModelsDir = Join-Path $portableDir 'models'
+          if (-Not (Test-Path $portableModelsDir)) {
+            New-Item -ItemType Directory -Path $portableModelsDir | Out-Null
+          }
+
+          # Copy exe
+          $exeSrc = Join-Path -Path $PWD -ChildPath "dist\run.exe"
+          if (-Not (Test-Path $exeSrc)) { Write-Error "Built exe not found: $exeSrc"; exit 1 }
+          $exeDst = Join-Path -Path $portableDir -ChildPath "Deep-Live-Cam.exe"
+          Copy-Item -Path $exeSrc -Destination $exeDst -Force
+
+          # Always include the pinned manifest and checksum/license artifacts so the portable bundle is self-describing
+          Copy-Item -Path (Join-Path $PWD 'models\manifest.json') -Destination (Join-Path $portableModelsDir 'manifest.json') -Force
+          Copy-Item -Path (Join-Path $PWD 'models\checksums.json') -Destination (Join-Path $portableModelsDir 'checksums.json') -Force
+          Copy-Item -Path (Join-Path $PWD 'models\license_report.txt') -Destination (Join-Path $portableModelsDir 'license_report.txt') -Force
+
+          # Include redistributable model files only (as explicitly set in manifest)
+          $manifest = Get-Content (Join-Path $PWD 'models\manifest.json') -Raw | ConvertFrom-Json
+          foreach ($m in $manifest.models) {
+            if ($m.redistributable -eq $true) {
+              $src = Join-Path $PWD 'models' $m.filename
+              if (-Not (Test-Path $src)) {
+                Write-Error "Redistributable model $($m.filename) not found under models/; aborting"
+                exit 1
+              }
+              Copy-Item -Path $src -Destination (Join-Path $portableModelsDir $m.filename) -Force
+              Write-Host "Included redistributable model: $($m.filename)"
+            } else {
+              Write-Host "Skipping non-redistributable model: $($m.name)"
+            }
+          }
+
+          # Include common runtime resource directories if present (config, resources, assets, ui, data)
+          $extraDirs = @('config','resources','assets','ui','data')
+          foreach ($d in $extraDirs) {
+            $src = Join-Path $PWD $d
+            if (Test-Path $src) {
+              $dst = Join-Path $portableDir $d
+              Copy-Item -Path $src -Destination $dst -Recurse -Force
+              Write-Host "Included runtime resource directory: $d"
+            }
+          }
+
+      - name: Validate packaged executable from inside portable directory (smoke)
+        shell: pwsh
+        run: |
+          Write-Host "Running smoke test from inside the portable directory (exact packaged layout)..."
+          Set-Location -Path (Join-Path $PWD 'dist\portable')
+          if (-Not (Test-Path '.\Deep-Live-Cam.exe')) {
+            Write-Error "Portable exe not found in dist\portable"
+            exit 1
+          }
+          Write-Host "Executing .\Deep-Live-Cam.exe --smoke-test"
+          & .\Deep-Live-Cam.exe --smoke-test
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Packaged portable executable smoke test failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          } else {
+            Write-Host "Packaged portable executable smoke test succeeded"
+          }
+
+      - name: Package artifact (zip portable dir)
+        shell: pwsh
+        run: |
+          Set-Location -Path $PWD
+          $portableDir = Join-Path -Path $PWD -ChildPath "dist\portable"
+          $zipPath = Join-Path -Path $PWD -ChildPath "Deep-Live-Cam-windows-portable.zip"
+          if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+          Compress-Archive -Path (Join-Path $portableDir "*") -DestinationPath $zipPath -Force
+          if (-Not (Test-Path $zipPath)) {
+            Write-Error "Failed to create portable ZIP at $zipPath"
+            exit 1
+          } else {
+            Write-Host "Created portable ZIP at $zipPath"
+          }
+
+      - name: Upload artifact (portable)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Deep-Live-Cam-windows-portable
+          path: Deep-Live-Cam-windows-portable.zip
