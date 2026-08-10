@@ -4,7 +4,6 @@ This module computes EAR from 68-point landmarks and reports if eyes are
 considered to be blinking. It's lightweight and well-suited for realtime.
 """
 from typing import List, Tuple
-import math
 
 
 LEFT_EYE_IDX = [36, 37, 38, 39, 40, 41]

@@ -16,10 +16,9 @@ import threading
 import time
 import tkinter as tk
 from tkinter import ttk, simpledialog, messagebox
-import numpy as np
 import cv2
 
-from modules.advanced_controls_config import get_current, write_config, DEFAULTS, CONFIG_PATH
+from modules.advanced_controls_config import get_current, write_config, DEFAULTS
 from modules import advanced_face_controls as afc
 from modules import face_state
 from modules import profile_manager

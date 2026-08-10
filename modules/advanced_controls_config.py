@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 from typing import Dict, Any
 
 CONFIG_PATH = os.path.join(os.path.expanduser("~"), ".deeplivecam_advanced_controls.json")

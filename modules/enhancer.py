@@ -6,9 +6,6 @@ small, it falls back to whole-patch processing or a no-op.
 """
 from __future__ import annotations
 
-import time
-from typing import Tuple
-
 
 def _bbox_from_mask(mask):
     import numpy as np
@@ -30,7 +27,6 @@ def apply_enhancer(patch, model: str = 'gfpgan', strength: float = 0.5, region_m
     """
     try:
         import numpy as np
-        import cv2
 
         if strength <= 0.0:
             return patch

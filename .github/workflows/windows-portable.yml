@@ -5,12 +5,15 @@ on:
   push:
     branches:
       - standalone/2.7-equivalent
+      - main
 
 jobs:
   build-windows-portable:
     name: Build Windows portable with PyInstaller (model pinning + portable assembly)
     runs-on: windows-latest
     timeout-minutes: 120
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -29,8 +32,12 @@ jobs:
           python -m pip install --upgrade pip
           pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python opencv-contrib-python-headless
           pip install -r requirements.txt
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "pip install -r requirements.txt failed (check requirements.txt for invalid entries)"
+            exit $LASTEXITCODE
+          }
           pip install pyinstaller pyinstaller-hooks-contrib
-          pip install requests cryptography
+          pip install cryptography
           pip install onnxruntime-gpu --quiet
           if ($LASTEXITCODE -ne 0) {
             Write-Host "onnxruntime-gpu install failed; falling back to onnxruntime"
@@ -199,7 +206,7 @@ jobs:
             'modules.standalone_apply'
           )
 
-          $args = @(
+          $pyinstallerArgs = @(
             '--noconfirm',
             '--onefile',
             '--paths', '.',
@@ -209,14 +216,14 @@ jobs:
           )
 
           foreach ($h in $hiddenImports) {
-            $args += '--hidden-import'
-            $args += $h
+            $pyinstallerArgs += '--hidden-import'
+            $pyinstallerArgs += $h
           }
 
-          $args += 'run.py'
+          $pyinstallerArgs += 'run.py'
 
-          Write-Host "PyInstaller args: $args"
-          & pyinstaller @args
+          Write-Host "PyInstaller args: $pyinstallerArgs"
+          & pyinstaller @pyinstallerArgs
           if ($LASTEXITCODE -ne 0) {
             Write-Error "PyInstaller build failed with exit code $LASTEXITCODE"
             exit $LASTEXITCODE
