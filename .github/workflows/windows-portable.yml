@@ -12,6 +12,8 @@ jobs:
     name: Build Windows portable with PyInstaller (model pinning + portable assembly)
     runs-on: windows-latest
     timeout-minutes: 120
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
