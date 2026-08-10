@@ -1,0 +1,3 @@
+Trigger file for Windows portable build workflow
+
+This commit triggers the Windows portable build workflow. Timestamp: 2026-08-09T07:12:00Z
