@@ -7,7 +7,6 @@ this file (via modules.advanced_controls_config) and updates the live blending.
 Run this separately while the main app is running to control live parameters.
 """
 
-import json
 import os
 import tkinter as tk
 from tkinter import ttk

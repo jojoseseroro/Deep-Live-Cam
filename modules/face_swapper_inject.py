@@ -4,7 +4,6 @@ import traceback
 import time
 
 try:
-    import numpy as np
     import modules.advanced_face_controls as afc
     import modules.advanced_controls_config as acc
     import modules.processors.frame.face_swapper as fs

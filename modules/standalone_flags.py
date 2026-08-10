@@ -1,7 +1,4 @@
 # Slightly tuned presets for final quality targets
-
-from typing import Dict
-
 PRESETS = {
     "low_latency": {
         "resolution": "720p",

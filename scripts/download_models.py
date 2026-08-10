@@ -21,7 +21,6 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import sys
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
