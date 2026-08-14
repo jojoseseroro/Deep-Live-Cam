@@ -5,15 +5,12 @@ on:
   push:
     branches:
       - standalone/2.7-equivalent
-      - main
 
 jobs:
   build-windows-portable:
     name: Build Windows portable with PyInstaller (model pinning + portable assembly)
     runs-on: windows-latest
     timeout-minutes: 120
-    permissions:
-      contents: read
 
     steps:
       - name: Checkout
@@ -37,7 +34,7 @@ jobs:
             exit $LASTEXITCODE
           }
           pip install pyinstaller pyinstaller-hooks-contrib
-          pip install cryptography
+          pip install requests cryptography
           pip install onnxruntime-gpu --quiet
           if ($LASTEXITCODE -ne 0) {
             Write-Host "onnxruntime-gpu install failed; falling back to onnxruntime"
@@ -206,7 +203,7 @@ jobs:
             'modules.standalone_apply'
           )
 
-          $pyinstallerArgs = @(
+          $args = @(
             '--noconfirm',
             '--onefile',
             '--paths', '.',
@@ -216,14 +213,14 @@ jobs:
           )
 
           foreach ($h in $hiddenImports) {
-            $pyinstallerArgs += '--hidden-import'
-            $pyinstallerArgs += $h
+            $args += '--hidden-import'
+            $args += $h
           }
 
-          $pyinstallerArgs += 'run.py'
+          $args += 'run.py'
 
-          Write-Host "PyInstaller args: $pyinstallerArgs"
-          & pyinstaller @pyinstallerArgs
+          Write-Host "PyInstaller args: $args"
+          & pyinstaller @args
           if ($LASTEXITCODE -ne 0) {
             Write-Error "PyInstaller build failed with exit code $LASTEXITCODE"
             exit $LASTEXITCODE
@@ -240,7 +237,42 @@ jobs:
             Write-Host "PyInstaller warning file not found; continuing"
           }
 
-      - name: Assemble portable directory (include redistributable models & metadata)
+      - name: Download FFmpeg tools for portable bundle
+        shell: pwsh
+        run: |
+          Write-Host "Downloading Windows x64 FFmpeg build for portable packaging..."
+          $ffmpegZip = Join-Path $PWD "ffmpeg-release-essentials.zip"
+          $ffmpegExtract = Join-Path $PWD "ffmpeg-extract"
+
+          if (Test-Path $ffmpegZip) { Remove-Item $ffmpegZip -Force }
+          if (Test-Path $ffmpegExtract) { Remove-Item $ffmpegExtract -Recurse -Force }
+
+          Invoke-WebRequest `
+            -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" `
+            -OutFile $ffmpegZip `
+            -UseBasicParsing `
+            -TimeoutSec 300
+
+          Expand-Archive -Path $ffmpegZip -DestinationPath $ffmpegExtract -Force
+
+          $ffmpegExe = Get-ChildItem -Path $ffmpegExtract -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          $ffprobeExe = Get-ChildItem -Path $ffmpegExtract -Recurse -Filter ffprobe.exe | Select-Object -First 1
+
+          if (-not $ffmpegExe) {
+            Write-Error "ffmpeg.exe not found in downloaded FFmpeg archive"
+            exit 1
+          }
+          if (-not $ffprobeExe) {
+            Write-Error "ffprobe.exe not found in downloaded FFmpeg archive"
+            exit 1
+          }
+
+          Copy-Item $ffmpegExe.FullName (Join-Path $PWD "ffmpeg.exe") -Force
+          Copy-Item $ffprobeExe.FullName (Join-Path $PWD "ffprobe.exe") -Force
+
+          Write-Host "Staged ffmpeg.exe and ffprobe.exe in workspace root"
+
+      - name: Assemble portable directory (include runtime models, tools & metadata)
         shell: pwsh
         run: |
           Write-Host "Assembling dist\portable with exe and required runtime resources..."
@@ -248,7 +280,6 @@ jobs:
           if (Test-Path $portableDir) { Remove-Item -Recurse -Force $portableDir }
           New-Item -ItemType Directory -Path $portableDir | Out-Null
 
-          # Ensure models directory exists inside portable dir before copying files
           $portableModelsDir = Join-Path $portableDir 'models'
           if (-Not (Test-Path $portableModelsDir)) {
             New-Item -ItemType Directory -Path $portableModelsDir | Out-Null
@@ -260,28 +291,37 @@ jobs:
           $exeDst = Join-Path -Path $portableDir -ChildPath "Deep-Live-Cam.exe"
           Copy-Item -Path $exeSrc -Destination $exeDst -Force
 
-          # Always include the pinned manifest and checksum/license artifacts so the portable bundle is self-describing
+          # Copy ffmpeg tools into portable root
+          $ffmpegSrc = Join-Path $PWD "ffmpeg.exe"
+          $ffprobeSrc = Join-Path $PWD "ffprobe.exe"
+          if (-Not (Test-Path $ffmpegSrc)) { Write-Error "Missing staged ffmpeg.exe"; exit 1 }
+          if (-Not (Test-Path $ffprobeSrc)) { Write-Error "Missing staged ffprobe.exe"; exit 1 }
+          Copy-Item -Path $ffmpegSrc -Destination (Join-Path $portableDir "ffmpeg.exe") -Force
+          Copy-Item -Path $ffprobeSrc -Destination (Join-Path $portableDir "ffprobe.exe") -Force
+
+          # Always include manifest/checksum/license metadata
           Copy-Item -Path (Join-Path $PWD 'models\manifest.json') -Destination (Join-Path $portableModelsDir 'manifest.json') -Force
           Copy-Item -Path (Join-Path $PWD 'models\checksums.json') -Destination (Join-Path $portableModelsDir 'checksums.json') -Force
           Copy-Item -Path (Join-Path $PWD 'models\license_report.txt') -Destination (Join-Path $portableModelsDir 'license_report.txt') -Force
 
-          # Include redistributable model files only (as explicitly set in manifest)
+          # Include redistributable models only
           $manifest = Get-Content (Join-Path $PWD 'models\manifest.json') -Raw | ConvertFrom-Json
           foreach ($m in $manifest.models) {
+            $src = Join-Path $PWD 'models' $m.filename
+
             if ($m.redistributable -eq $true) {
-              $src = Join-Path $PWD 'models' $m.filename
               if (-Not (Test-Path $src)) {
-                Write-Error "Redistributable model $($m.filename) not found under models/; aborting"
+                Write-Error "Redistributable runtime model missing: $($m.filename)"
                 exit 1
               }
               Copy-Item -Path $src -Destination (Join-Path $portableModelsDir $m.filename) -Force
-              Write-Host "Included redistributable model: $($m.filename)"
+              Write-Host "Included redistributable runtime model: $($m.filename)"
             } else {
-              Write-Host "Skipping non-redistributable model: $($m.name)"
+              Write-Host "Skipping non-redistributable model from distributable bundle: $($m.name)"
             }
           }
 
-          # Include common runtime resource directories if present (config, resources, assets, ui, data)
+          # Include common runtime resource directories if present
           $extraDirs = @('config','resources','assets','ui','data')
           foreach ($d in $extraDirs) {
             $src = Join-Path $PWD $d
@@ -290,6 +330,57 @@ jobs:
               Copy-Item -Path $src -Destination $dst -Recurse -Force
               Write-Host "Included runtime resource directory: $d"
             }
+          }
+
+      - name: Validate portable runtime files before packaging
+        shell: pwsh
+        run: |
+          $portableDir = Join-Path $PWD 'dist\portable'
+
+          $checks = @(
+            (Join-Path $portableDir 'Deep-Live-Cam.exe'),
+            (Join-Path $portableDir 'ffmpeg.exe'),
+            (Join-Path $portableDir 'ffprobe.exe')
+          )
+
+          foreach ($p in $checks) {
+            if (-not (Test-Path $p)) {
+              Write-Error "Missing required portable runtime file: $p"
+              exit 1
+            }
+            Write-Host "Verified present: $p"
+          }
+
+          $manifest = Get-Content (Join-Path $PWD 'models\manifest.json') -Raw | ConvertFrom-Json
+          foreach ($m in $manifest.models) {
+            $portableModelPath = Join-Path $portableDir 'models' $m.filename
+            if ($m.redistributable -eq $true) {
+              if (-not (Test-Path $portableModelPath)) {
+                Write-Error "Missing redistributable model in portable bundle: $portableModelPath"
+                exit 1
+              }
+              Write-Host "Verified redistributable model present: $portableModelPath"
+            } else {
+              if (Test-Path $portableModelPath) {
+                Write-Error "Non-redistributable model should not be included in distributable bundle: $portableModelPath"
+                exit 1
+              }
+              Write-Host "Verified non-redistributable model excluded: $($m.filename)"
+            }
+          }
+
+          Write-Host "Validating ffmpeg.exe..."
+          & (Join-Path $portableDir 'ffmpeg.exe') -version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "ffmpeg.exe -version failed"
+            exit $LASTEXITCODE
+          }
+
+          Write-Host "Validating ffprobe.exe..."
+          & (Join-Path $portableDir 'ffprobe.exe') -version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "ffprobe.exe -version failed"
+            exit $LASTEXITCODE
           }
 
       - name: Validate packaged executable from inside portable directory (smoke)
