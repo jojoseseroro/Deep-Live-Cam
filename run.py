@@ -96,4 +96,7 @@ platform_info.print_banner()
 from modules import core
 
 if __name__ == '__main__':
+    if '--smoke-test' in sys.argv:
+        print('[smoke-test] Deep-Live-Cam packaged executable started successfully.')
+        sys.exit(0)
     core.run()
